@@ -120,21 +120,43 @@ router.post('/preview-pricelist', authenticate, requireApproved, authorize('dist
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(sheet);
+    
+    // Try to find header row (look for row with multiple text values)
+    const range = XLSX.utils.decode_range(sheet['!ref']);
+    let headerRow = 0;
+    
+    // Check first 30 rows to find the actual header
+    for (let r = range.s.r; r <= Math.min(range.e.r, 30); r++) {
+      let textCellCount = 0;
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+        if (cell && cell.t === 's' && cell.v && cell.v.toString().trim().length > 1) {
+          textCellCount++;
+        }
+      }
+      // If we find 3+ text cells in a row, likely the header
+      if (textCellCount >= 3) {
+        headerRow = r;
+        break;
+      }
+    }
+
+    const data = XLSX.utils.sheet_to_json(sheet, { range: headerRow });
 
     if (data.length === 0) {
       return res.status(400).json({ error: 'Fayl bo\'sh yoki formati noto\'g\'ri' });
     }
 
-    // Get column names from first row
-    const columns = Object.keys(data[0]);
+    // Get column names from first data row
+    const columns = Object.keys(data[0]).filter(k => k !== '__EMPTY' && !k.startsWith('__'));
     // Sample first 5 rows for preview
     const sampleRows = data.slice(0, 5);
 
     res.json({
       columns,
       sampleRows,
-      totalRows: data.length
+      totalRows: data.length,
+      headerRow: headerRow + 1 // 1-indexed for user display
     });
   } catch (err) {
     console.error('Preview pricelist error:', err);
@@ -164,7 +186,22 @@ router.post('/upload-pricelist', authenticate, requireApproved, authorize('distr
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(sheet);
+    
+    // Auto-detect header row
+    const range = XLSX.utils.decode_range(sheet['!ref']);
+    let headerRow = 0;
+    for (let r = range.s.r; r <= Math.min(range.e.r, 30); r++) {
+      let textCellCount = 0;
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+        if (cell && cell.t === 's' && cell.v && cell.v.toString().trim().length > 1) {
+          textCellCount++;
+        }
+      }
+      if (textCellCount >= 3) { headerRow = r; break; }
+    }
+
+    const data = XLSX.utils.sheet_to_json(sheet, { range: headerRow });
 
     let matched = 0;
     let unmatched = 0;
@@ -200,20 +237,43 @@ router.post('/upload-pricelist', authenticate, requireApproved, authorize('distr
         }
 
         if (!drugId && name) {
+          // Try fuzzy search with lower threshold
           const result = await client.query(
-            `SELECT id FROM drugs WHERE similarity(name, $1) > 0.3 ORDER BY similarity(name, $1) DESC LIMIT 1`,
+            `SELECT id, name, similarity(name, $1) as sim FROM drugs 
+             WHERE name % $1 OR name ILIKE '%' || $1 || '%' OR name_latin ILIKE '%' || $1 || '%'
+             ORDER BY similarity(name, $1) DESC LIMIT 1`,
             [name]
           );
-          if (result.rows.length > 0) drugId = result.rows[0].id;
+          if (result.rows.length > 0 && result.rows[0].sim > 0.2) {
+            drugId = result.rows[0].id;
+          }
         }
 
         if (drugId) {
+          // Drug found in database - link it
           await client.query(`
             INSERT INTO distributor_drugs (distributor_id, drug_id, price, quantity, expiry_date, batch_number, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, NOW())
             ON CONFLICT (distributor_id, drug_id, batch_number)
             DO UPDATE SET price = $3, quantity = $4, expiry_date = $5, updated_at = NOW(), is_available = TRUE
           `, [distributorId, drugId, price, quantity, expiryDate, batchNumber || 'default']);
+          matched++;
+        } else if (name) {
+          // Drug NOT found - create new drug entry and link it
+          const newDrug = await client.query(`
+            INSERT INTO drugs (name, barcode, mxik_code, manufacturer)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+          `, [name, barcode || null, mxik || null, null]);
+          
+          const newDrugId = newDrug.rows[0].id;
+
+          await client.query(`
+            INSERT INTO distributor_drugs (distributor_id, drug_id, price, quantity, expiry_date, batch_number, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            ON CONFLICT (distributor_id, drug_id, batch_number)
+            DO UPDATE SET price = $3, quantity = $4, expiry_date = $5, updated_at = NOW(), is_available = TRUE
+          `, [distributorId, newDrugId, price, quantity, expiryDate, batchNumber || 'default']);
           matched++;
         } else {
           unmatched++;

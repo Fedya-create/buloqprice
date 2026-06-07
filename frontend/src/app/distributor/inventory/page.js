@@ -185,12 +185,12 @@ function UploadModal({ onClose, onSuccess }) {
     const lowerCols = columns.map(c => c.toLowerCase());
 
     // Auto-detect column mappings
-    const namePatterns = ['nomi', 'name', 'dori nomi', 'tovar nomi', 'наименование', 'препарат'];
-    const pricePatterns = ['narx', 'price', 'цена', 'summa', 'narxi'];
-    const qtyPatterns = ['soni', 'quantity', 'qty', 'qoldiq', 'остаток', 'miqdor'];
-    const barcodePatterns = ['shtrix', 'barcode', 'bar-code', 'штрих', 'ean'];
-    const mxikPatterns = ['mxik', 'мхик', 'kod', 'code'];
-    const expiryPatterns = ['yaroqlilik', 'expiry', 'срок', 'muddati', 'exp'];
+    const namePatterns = ['nomi', 'name', 'dori nomi', 'tovar nomi', 'наименование', 'препарат', 'номи', 'наименования'];
+    const pricePatterns = ['narx', 'price', 'цена', 'summa', 'narxi', 'цена со скидкой'];
+    const qtyPatterns = ['soni', 'quantity', 'qty', 'qoldiq', 'остаток', 'miqdor', 'количество', 'кол-во', 'кол'];
+    const barcodePatterns = ['shtrix', 'barcode', 'bar-code', 'штрих', 'ean', 'код'];
+    const mxikPatterns = ['mxik', 'мхик', 'ikpu', 'икпу'];
+    const expiryPatterns = ['yaroqlilik', 'expiry', 'срок', 'muddati', 'exp', 'годност'];
     const batchPatterns = ['partiya', 'batch', 'серия', 'lot'];
 
     const findMatch = (patterns) => {
