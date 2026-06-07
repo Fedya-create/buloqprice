@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: buloqprice-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: buloqprice
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  # Backend API
+  backend:
+    build: ./backend
+    container_name: buloqprice-backend
+    restart: unless-stopped
+    environment:
+      PORT: 5000
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/buloqprice
+      JWT_SECRET: your_super_secret_jwt_key_change_this
+      JWT_EXPIRES_IN: 7d
+      NODE_ENV: production
+    ports:
+      - "5000:5000"
+    depends_on:
+      - db
+
+  # Frontend (Next.js)
+  frontend:
+    build: ./frontend
+    container_name: buloqprice-frontend
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:5000/api
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:
