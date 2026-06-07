@@ -17,7 +17,7 @@ const upload = multer({
       cb(new Error('Faqat Excel fayllar qabul qilinadi'), false);
     }
   },
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB
 });
 
 // Get distributor dashboard stats
