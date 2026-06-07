@@ -12,7 +12,7 @@ router.post('/register', [
   body('email').isEmail().withMessage('Email noto\'g\'ri formatda'),
   body('password').isLength({ min: 6 }).withMessage('Parol kamida 6 ta belgidan iborat bo\'lishi kerak'),
   body('role').isIn(['pharmacy', 'distributor']).withMessage('Role noto\'g\'ri'),
-  body('phone').optional().isMobilePhone(),
+  body('phone').optional({ values: 'falsy' }),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -21,6 +21,7 @@ router.post('/register', [
     }
 
     const { email, password, role, phone, profileData } = req.body;
+    const cleanPhone = phone ? phone.replace(/\s/g, '') : null;
 
     // Check if user already exists
     const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
@@ -37,7 +38,7 @@ router.post('/register', [
       // Create user
       const userResult = await client.query(
         'INSERT INTO users (email, password_hash, role, phone) VALUES ($1, $2, $3, $4) RETURNING id, email, role, status',
-        [email, passwordHash, role, phone]
+        [email, passwordHash, role, cleanPhone]
       );
       const user = userResult.rows[0];
 
