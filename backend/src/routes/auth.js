@@ -151,4 +151,33 @@ router.get('/me', authenticate, async (req, res) => {
   }
 });
 
+// Emergency admin unblock (secret recovery endpoint)
+// Use: POST /api/auth/emergency-unblock with { secret, email }
+router.post('/emergency-unblock', async (req, res) => {
+  try {
+    const { secret, email } = req.body;
+
+    // Secret key must match env variable (set your own!)
+    const RECOVERY_SECRET = process.env.RECOVERY_SECRET || 'buloqprice-recovery-2024';
+
+    if (secret !== RECOVERY_SECRET) {
+      return res.status(403).json({ error: 'Noto\'g\'ri maxfiy kalit' });
+    }
+
+    const result = await pool.query(
+      "UPDATE users SET status = 'approved', updated_at = NOW() WHERE email = $1 AND role = 'admin' RETURNING id, email, status",
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Admin topilmadi' });
+    }
+
+    res.json({ message: 'Admin blokdan chiqarildi!', user: result.rows[0] });
+  } catch (err) {
+    console.error('Emergency unblock error:', err);
+    res.status(500).json({ error: 'Server xatosi' });
+  }
+});
+
 module.exports = router;

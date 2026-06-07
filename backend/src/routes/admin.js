@@ -70,6 +70,11 @@ router.patch('/users/:userId/block', authenticate, authorize('admin'), async (re
     const { userId } = req.params;
     const { blocked } = req.body;
 
+    // Admin o'zini bloklashni oldini olish
+    if (parseInt(userId) === req.user.id && blocked) {
+      return res.status(400).json({ error: 'O\'zingizni bloklashingiz mumkin emas!' });
+    }
+
     const newStatus = blocked ? 'blocked' : 'approved';
     await pool.query('UPDATE users SET status = $1, updated_at = NOW() WHERE id = $2', [newStatus, userId]);
 
