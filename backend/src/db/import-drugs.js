@@ -101,14 +101,37 @@ async function importFromFile(filePath) {
     console.log(`   Header row: ${headerRow + 1}, Ustunlar: ${cols.slice(0, 8).join(', ')}...`);
 
     drugs = data.map(item => {
-      // tasnif.soliq.uz MXIK catalog formati (41000+ dori)
-      const mxikNomi = item['MXIK NOMI'] || item['MXIK_NOMI'] || item['mxik_nomi'];
-      const brendNomi = item['BREND NOMI'] || item['BREND_NOMI'] || item['brend_nomi'];
-      const atributNomi = item['ATRIBUT NOMI'] || item['ATRIBUT_NOMI'] || item['atribut_nomi'];
-      const pozitsiyaNomi = item['POZITSIYA NOMI'] || item['POZITSIYA_NOMI'];
-      const subpozitsiyaNomi = item['SUBPOZITSIYA NOMI'] || item['SUBPOZITSIYA_NOMI'];
+      // Har bir ustunni topish uchun barcha variantlarni sinab ko'ramiz
+      // Ustun nomlari lotin yoki kirill bo'lishi mumkin
+      const keys = Object.keys(item);
+      
+      // Helper: ustun nomini topish (partial match, case-insensitive)
+      const findCol = (patterns) => {
+        for (const pattern of patterns) {
+          // Exact match
+          if (item[pattern] !== undefined && item[pattern] !== null && item[pattern] !== '') return item[pattern];
+          // Case-insensitive search
+          const found = keys.find(k => k.toLowerCase().trim() === pattern.toLowerCase().trim());
+          if (found && item[found] !== undefined && item[found] !== null && item[found] !== '') return item[found];
+        }
+        // Partial match
+        for (const pattern of patterns) {
+          const found = keys.find(k => k.toLowerCase().includes(pattern.toLowerCase()));
+          if (found && item[found] !== undefined && item[found] !== null && item[found] !== '') return item[found];
+        }
+        return null;
+      };
 
-      // Dori nomi: ATRIBUT NOMI (eng to'liq) yoki MXIK NOMI yoki BREND NOMI
+      const atributNomi = findCol(['AТРИБУТ НОМИ', 'АТРИБУТ НОМИ', 'ATRIBUT NOMI', 'ATRIBUT_NOMI', 'атрибут']);
+      const mxikNomi = findCol(['МХИК НОМИ', 'MXIK NOMI', 'MXIK_NOMI', 'мхик номи']);
+      const brendNomi = findCol(['БРЕНД НОМИ', 'BREND NOMI', 'BREND_NOMI', 'бренд']);
+      const pozitsiyaNomi = findCol(['ПОЗИЦИЯ НОМИ', 'POZITSIYA NOMI', 'POZITSIYA_NOMI', 'позиция']);
+      const subpozitsiyaNomi = findCol(['СУБПОЗИЦИЯ НОМИ', 'SUBPOZITSIYA NOMI', 'субпозиция']);
+      const mxikKodi = findCol(['МХИК КОДИ', 'MXIK KODI', 'MXIK_KODI', 'мхик коди', 'МХИК']);
+      const shtrixKodi = findCol(['ШТРИХ КОДИ', 'SHTRIX KODI', 'SHTRIX_KODI', 'штрих', 'Barcode']);
+      const biriktirilgan = findCol(['БИРИКТИРИЛГАН', 'BIRIKTIRILGAN', 'кадоклар', 'КАДОҚЛАР']);
+
+      // Dori nomi: ATRIBUT NOMI (eng to'liq) > MXIK NOMI > BREND NOMI > POZITSIYA
       const name = atributNomi || mxikNomi || brendNomi || pozitsiyaNomi
         || item['Nomi'] || item['Наименование'] || item['Торговое наименование'] 
         || item['name'] || item['Name'];
@@ -119,14 +142,14 @@ async function importFromFile(filePath) {
         name: name.toString().trim(),
         name_latin: null,
         generic_name: brendNomi || pozitsiyaNomi || subpozitsiyaNomi || null,
-        manufacturer: item['Производитель'] || item['Ishlab chiqaruvchi'] || item['Manufacturer'] || null,
-        country: item['Страна'] || item['Mamlakat'] || item['Country'] || null,
+        manufacturer: findCol(['Производитель', 'Ishlab chiqaruvchi', 'Manufacturer']) || null,
+        country: findCol(['Страна', 'Mamlakat', 'Country']) || null,
         dosage: null,
         form: null,
-        barcode: (item['SHTRIX KODI'] || item['SHTRIX_KODI'] || item['Штрих-код'] || item['Barcode'] || item['shtrix_kodi'] || '').toString().trim() || null,
-        mxik_code: (item['MXIK KODI'] || item['MXIK_KODI'] || item['MXIK'] || item['МХИК'] || item['mxik_kodi'] || '').toString().trim() || null,
-        atc_code: item['АТС'] || item['ATC'] || null,
-        reg_number: item['Рег. номер'] || item['Reg raqami'] || null,
+        barcode: shtrixKodi ? shtrixKodi.toString().trim() : null,
+        mxik_code: mxikKodi ? mxikKodi.toString().trim() : null,
+        atc_code: findCol(['АТС', 'ATC']) || null,
+        reg_number: findCol(['Рег. номер', 'Reg raqami']) || null,
         prescription_required: false,
       };
     }).filter(d => d && d.name && d.name.length > 1);
