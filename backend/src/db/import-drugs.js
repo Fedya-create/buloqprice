@@ -81,22 +81,55 @@ async function importFromFile(filePath) {
     const XLSX = require('xlsx');
     const workbook = XLSX.readFile(filePath);
     const sheet = workbook.Sheets[workbook.SheetNames[0]];
-    const data = XLSX.utils.sheet_to_json(sheet);
 
-    drugs = data.map(item => ({
-      name: item['Nomi'] || item['Наименование'] || item['Торговое наименование'] || item['name'] || Object.values(item)[0],
-      name_latin: item['INN'] || item['МНН'] || item['Latin nomi'],
-      generic_name: item['МНН'] || item['INN'] || item['Generic'],
-      manufacturer: item['Производитель'] || item['Ishlab chiqaruvchi'] || item['Manufacturer'],
-      country: item['Страна'] || item['Mamlakat'] || item['Country'],
-      dosage: item['Дозировка'] || item['Doza'] || item['Dosage'],
-      form: item['Форма выпуска'] || item['Shakli'] || item['Form'],
-      barcode: item['Штрих-код'] || item['Barcode'],
-      mxik_code: item['MXIK'] || item['МХИК'],
-      atc_code: item['АТС'] || item['ATC'],
-      reg_number: item['Рег. номер'] || item['Reg raqami'],
-      prescription_required: false,
-    })).filter(d => d.name);
+    // Auto-detect header row (look for row with 4+ text cells)
+    const range = XLSX.utils.decode_range(sheet['!ref']);
+    let headerRow = 0;
+    for (let r = range.s.r; r <= Math.min(range.e.r, 30); r++) {
+      let textCellCount = 0;
+      for (let c = range.s.c; c <= Math.min(range.e.c, 20); c++) {
+        const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+        if (cell && cell.t === 's' && cell.v && cell.v.toString().trim().length > 2) {
+          textCellCount++;
+        }
+      }
+      if (textCellCount >= 4) { headerRow = r; break; }
+    }
+
+    const data = XLSX.utils.sheet_to_json(sheet, { range: headerRow });
+    const cols = Object.keys(data[0] || {});
+    console.log(`   Header row: ${headerRow + 1}, Ustunlar: ${cols.slice(0, 8).join(', ')}...`);
+
+    drugs = data.map(item => {
+      // tasnif.soliq.uz MXIK catalog formati (41000+ dori)
+      const mxikNomi = item['MXIK NOMI'] || item['MXIK_NOMI'] || item['mxik_nomi'];
+      const brendNomi = item['BREND NOMI'] || item['BREND_NOMI'] || item['brend_nomi'];
+      const atributNomi = item['ATRIBUT NOMI'] || item['ATRIBUT_NOMI'] || item['atribut_nomi'];
+      const pozitsiyaNomi = item['POZITSIYA NOMI'] || item['POZITSIYA_NOMI'];
+      const subpozitsiyaNomi = item['SUBPOZITSIYA NOMI'] || item['SUBPOZITSIYA_NOMI'];
+
+      // Dori nomi: ATRIBUT NOMI (eng to'liq) yoki MXIK NOMI yoki BREND NOMI
+      const name = atributNomi || mxikNomi || brendNomi || pozitsiyaNomi
+        || item['Nomi'] || item['Наименование'] || item['Торговое наименование'] 
+        || item['name'] || item['Name'];
+      
+      if (!name) return null;
+
+      return {
+        name: name.toString().trim(),
+        name_latin: null,
+        generic_name: brendNomi || pozitsiyaNomi || subpozitsiyaNomi || null,
+        manufacturer: item['Производитель'] || item['Ishlab chiqaruvchi'] || item['Manufacturer'] || null,
+        country: item['Страна'] || item['Mamlakat'] || item['Country'] || null,
+        dosage: null,
+        form: null,
+        barcode: (item['SHTRIX KODI'] || item['SHTRIX_KODI'] || item['Штрих-код'] || item['Barcode'] || item['shtrix_kodi'] || '').toString().trim() || null,
+        mxik_code: (item['MXIK KODI'] || item['MXIK_KODI'] || item['MXIK'] || item['МХИК'] || item['mxik_kodi'] || '').toString().trim() || null,
+        atc_code: item['АТС'] || item['ATC'] || null,
+        reg_number: item['Рег. номер'] || item['Reg raqami'] || null,
+        prescription_required: false,
+      };
+    }).filter(d => d && d.name && d.name.length > 1);
   } else {
     throw new Error(`Noma'lum fayl formati: ${ext}. .json, .csv, .xlsx qo'llab-quvvatlanadi.`);
   }
@@ -183,45 +216,56 @@ async function importFromMxik() {
 }
 
 // ============================================================
-// 3. BAZAGA SAQLASH
+// 3. BAZAGA SAQLASH (BATCH INSERT - 41000+ dori uchun tez)
 // ============================================================
 async function saveToDB(drugs) {
   const client = await pool.connect();
   let inserted = 0;
   let skipped = 0;
+  const BATCH_SIZE = 500;
 
   try {
     await client.query('BEGIN');
 
-    for (const drug of drugs) {
-      try {
-        const result = await client.query(`
-          INSERT INTO drugs (name, name_latin, generic_name, manufacturer, country, dosage, form, barcode, mxik_code, atc_code, prescription_required)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-          ON CONFLICT DO NOTHING
-          RETURNING id
-        `, [
-          drug.name,
-          drug.name_latin || null,
-          drug.generic_name || null,
-          drug.manufacturer || null,
-          drug.country || null,
-          drug.dosage || null,
-          drug.form || null,
-          drug.barcode || null,
-          drug.mxik_code || null,
-          drug.atc_code || null,
-          drug.prescription_required || false,
-        ]);
+    // Process in batches
+    for (let i = 0; i < drugs.length; i += BATCH_SIZE) {
+      const batch = drugs.slice(i, i + BATCH_SIZE);
+      
+      for (const drug of batch) {
+        try {
+          const result = await client.query(`
+            INSERT INTO drugs (name, name_latin, generic_name, manufacturer, country, dosage, form, barcode, mxik_code, atc_code, prescription_required)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            ON CONFLICT DO NOTHING
+            RETURNING id
+          `, [
+            drug.name,
+            drug.name_latin || null,
+            drug.generic_name || null,
+            drug.manufacturer || null,
+            drug.country || null,
+            drug.dosage || null,
+            drug.form || null,
+            drug.barcode || null,
+            drug.mxik_code || null,
+            drug.atc_code || null,
+            drug.prescription_required || false,
+          ]);
 
-        if (result.rows.length > 0) inserted++;
-        else skipped++;
-      } catch (err) {
-        skipped++;
+          if (result.rows.length > 0) inserted++;
+          else skipped++;
+        } catch (err) {
+          skipped++;
+        }
       }
+
+      // Progress
+      const progress = Math.min(100, Math.round(((i + batch.length) / drugs.length) * 100));
+      process.stdout.write(`\r   💾 Progress: ${progress}% (${i + batch.length}/${drugs.length})`);
     }
 
     await client.query('COMMIT');
+    console.log(''); // New line after progress
     return { inserted, skipped };
   } catch (err) {
     await client.query('ROLLBACK');
