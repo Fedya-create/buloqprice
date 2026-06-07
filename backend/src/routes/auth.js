@@ -12,7 +12,7 @@ router.post('/register', [
   body('email').isEmail().withMessage('Email noto\'g\'ri formatda'),
   body('password').isLength({ min: 6 }).withMessage('Parol kamida 6 ta belgidan iborat bo\'lishi kerak'),
   body('role').isIn(['pharmacy', 'distributor']).withMessage('Role noto\'g\'ri'),
-  body('phone').optional().isMobilePhone(),
+  body('phone').optional({ values: 'falsy' }),
 ], async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -21,6 +21,7 @@ router.post('/register', [
     }
 
     const { email, password, role, phone, profileData } = req.body;
+    const cleanPhone = phone ? phone.replace(/\s/g, '') : null;
 
     // Check if user already exists
     const existingUser = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
@@ -37,7 +38,7 @@ router.post('/register', [
       // Create user
       const userResult = await client.query(
         'INSERT INTO users (email, password_hash, role, phone) VALUES ($1, $2, $3, $4) RETURNING id, email, role, status',
-        [email, passwordHash, role, phone]
+        [email, passwordHash, role, cleanPhone]
       );
       const user = userResult.rows[0];
 
@@ -147,6 +148,35 @@ router.get('/me', authenticate, async (req, res) => {
     res.json({ user: req.user, profile });
   } catch (err) {
     console.error('Get profile error:', err);
+    res.status(500).json({ error: 'Server xatosi' });
+  }
+});
+
+// Emergency admin unblock (secret recovery endpoint)
+// Use: POST /api/auth/emergency-unblock with { secret, email }
+router.post('/emergency-unblock', async (req, res) => {
+  try {
+    const { secret, email } = req.body;
+
+    // Secret key must match env variable (set your own!)
+    const RECOVERY_SECRET = process.env.RECOVERY_SECRET || 'buloqprice-recovery-2024';
+
+    if (secret !== RECOVERY_SECRET) {
+      return res.status(403).json({ error: 'Noto\'g\'ri maxfiy kalit' });
+    }
+
+    const result = await pool.query(
+      "UPDATE users SET status = 'approved', updated_at = NOW() WHERE email = $1 AND role = 'admin' RETURNING id, email, status",
+      [email]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Admin topilmadi' });
+    }
+
+    res.json({ message: 'Admin blokdan chiqarildi!', user: result.rows[0] });
+  } catch (err) {
+    console.error('Emergency unblock error:', err);
     res.status(500).json({ error: 'Server xatosi' });
   }
 });

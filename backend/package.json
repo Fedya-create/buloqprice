@@ -7,7 +7,9 @@
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "migrate": "node src/db/migrate.js",
-    "seed": "node src/db/seed.js"
+    "seed": "node src/db/seed.js",
+    "import-drugs": "node src/db/import-drugs.js",
+    "import-mxik": "node src/db/import-drugs.js --from-mxik"
   },
   "dependencies": {
     "express": "^4.18.2",

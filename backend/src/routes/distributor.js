@@ -17,7 +17,7 @@ const upload = multer({
       cb(new Error('Faqat Excel fayllar qabul qilinadi'), false);
     }
   },
-  limits: { fileSize: 10 * 1024 * 1024 } // 10MB
+  limits: { fileSize: 50 * 1024 * 1024 } // 50MB
 });
 
 // Get distributor dashboard stats
@@ -110,7 +110,61 @@ router.get('/inventory', authenticate, requireApproved, authorize('distributor')
   }
 });
 
-// Upload Excel price list
+// Preview Excel file (parse columns and sample rows without saving)
+router.post('/preview-pricelist', authenticate, requireApproved, authorize('distributor'), upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Fayl yuklanmadi' });
+    }
+
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    
+    // Try to find header row (look for row with multiple text values)
+    const range = XLSX.utils.decode_range(sheet['!ref']);
+    let headerRow = 0;
+    
+    // Check first 30 rows to find the actual header
+    for (let r = range.s.r; r <= Math.min(range.e.r, 30); r++) {
+      let textCellCount = 0;
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+        if (cell && cell.t === 's' && cell.v && cell.v.toString().trim().length > 1) {
+          textCellCount++;
+        }
+      }
+      // If we find 3+ text cells in a row, likely the header
+      if (textCellCount >= 3) {
+        headerRow = r;
+        break;
+      }
+    }
+
+    const data = XLSX.utils.sheet_to_json(sheet, { range: headerRow });
+
+    if (data.length === 0) {
+      return res.status(400).json({ error: 'Fayl bo\'sh yoki formati noto\'g\'ri' });
+    }
+
+    // Get column names from first data row
+    const columns = Object.keys(data[0]).filter(k => k !== '__EMPTY' && !k.startsWith('__'));
+    // Sample first 5 rows for preview
+    const sampleRows = data.slice(0, 5);
+
+    res.json({
+      columns,
+      sampleRows,
+      totalRows: data.length,
+      headerRow: headerRow + 1 // 1-indexed for user display
+    });
+  } catch (err) {
+    console.error('Preview pricelist error:', err);
+    res.status(500).json({ error: 'Faylni o\'qishda xatolik' });
+  }
+});
+
+// Upload Excel price list with column mapping
 router.post('/upload-pricelist', authenticate, requireApproved, authorize('distributor'), upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -120,11 +174,34 @@ router.post('/upload-pricelist', authenticate, requireApproved, authorize('distr
     const distResult = await pool.query('SELECT id FROM distributors WHERE user_id = $1', [req.user.id]);
     const distributorId = distResult.rows[0].id;
 
+    // Parse mapping from request
+    let mapping = {};
+    try {
+      mapping = JSON.parse(req.body.mapping || '{}');
+    } catch (e) {
+      // Fallback: use default column names
+    }
+
     // Parse Excel file
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
-    const data = XLSX.utils.sheet_to_json(sheet);
+    
+    // Auto-detect header row
+    const range = XLSX.utils.decode_range(sheet['!ref']);
+    let headerRow = 0;
+    for (let r = range.s.r; r <= Math.min(range.e.r, 30); r++) {
+      let textCellCount = 0;
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const cell = sheet[XLSX.utils.encode_cell({ r, c })];
+        if (cell && cell.t === 's' && cell.v && cell.v.toString().trim().length > 1) {
+          textCellCount++;
+        }
+      }
+      if (textCellCount >= 3) { headerRow = r; break; }
+    }
+
+    const data = XLSX.utils.sheet_to_json(sheet, { range: headerRow });
 
     let matched = 0;
     let unmatched = 0;
@@ -135,13 +212,14 @@ router.post('/upload-pricelist', authenticate, requireApproved, authorize('distr
       await client.query('BEGIN');
 
       for (const row of data) {
-        const barcode = row['Shtrix-kod'] || row['barcode'] || row['Barcode'];
-        const mxik = row['MXIK'] || row['mxik_code'];
-        const name = row['Nomi'] || row['name'] || row['Name'] || row['Dori nomi'];
-        const price = parseFloat(row['Narx'] || row['price'] || row['Price'] || 0);
-        const quantity = parseInt(row['Soni'] || row['quantity'] || row['Qty'] || row['Qoldiq'] || 0);
-        const expiryDate = row['Yaroqlilik'] || row['expiry'] || row['Expiry'] || null;
-        const batchNumber = row['Partiya'] || row['batch'] || row['Batch'] || null;
+        // Use mapping to get values, fallback to common column names
+        const barcode = mapping.barcode ? row[mapping.barcode] : (row['Shtrix-kod'] || row['barcode'] || row['Barcode']);
+        const mxik = mapping.mxik ? row[mapping.mxik] : (row['MXIK'] || row['mxik_code']);
+        const name = mapping.name ? row[mapping.name] : (row['Nomi'] || row['name'] || row['Name'] || row['Dori nomi']);
+        const price = parseFloat(mapping.price ? row[mapping.price] : (row['Narx'] || row['price'] || row['Price'] || 0));
+        const quantity = parseInt(mapping.quantity ? row[mapping.quantity] : (row['Soni'] || row['quantity'] || row['Qty'] || row['Qoldiq'] || 0)) || 0;
+        const expiryDate = mapping.expiry ? row[mapping.expiry] : (row['Yaroqlilik'] || row['expiry'] || row['Expiry'] || null);
+        const batchNumber = mapping.batch ? row[mapping.batch] : (row['Partiya'] || row['batch'] || row['Batch'] || null);
 
         if (!price || price <= 0) continue;
 
@@ -159,20 +237,43 @@ router.post('/upload-pricelist', authenticate, requireApproved, authorize('distr
         }
 
         if (!drugId && name) {
+          // Try fuzzy search with lower threshold
           const result = await client.query(
-            `SELECT id FROM drugs WHERE similarity(name, $1) > 0.3 ORDER BY similarity(name, $1) DESC LIMIT 1`,
+            `SELECT id, name, similarity(name, $1) as sim FROM drugs 
+             WHERE name % $1 OR name ILIKE '%' || $1 || '%' OR name_latin ILIKE '%' || $1 || '%'
+             ORDER BY similarity(name, $1) DESC LIMIT 1`,
             [name]
           );
-          if (result.rows.length > 0) drugId = result.rows[0].id;
+          if (result.rows.length > 0 && result.rows[0].sim > 0.2) {
+            drugId = result.rows[0].id;
+          }
         }
 
         if (drugId) {
+          // Drug found in database - link it
           await client.query(`
             INSERT INTO distributor_drugs (distributor_id, drug_id, price, quantity, expiry_date, batch_number, updated_at)
             VALUES ($1, $2, $3, $4, $5, $6, NOW())
             ON CONFLICT (distributor_id, drug_id, batch_number)
             DO UPDATE SET price = $3, quantity = $4, expiry_date = $5, updated_at = NOW(), is_available = TRUE
           `, [distributorId, drugId, price, quantity, expiryDate, batchNumber || 'default']);
+          matched++;
+        } else if (name) {
+          // Drug NOT found - create new drug entry and link it
+          const newDrug = await client.query(`
+            INSERT INTO drugs (name, barcode, mxik_code, manufacturer)
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+          `, [name, barcode || null, mxik || null, null]);
+          
+          const newDrugId = newDrug.rows[0].id;
+
+          await client.query(`
+            INSERT INTO distributor_drugs (distributor_id, drug_id, price, quantity, expiry_date, batch_number, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
+            ON CONFLICT (distributor_id, drug_id, batch_number)
+            DO UPDATE SET price = $3, quantity = $4, expiry_date = $5, updated_at = NOW(), is_available = TRUE
+          `, [distributorId, newDrugId, price, quantity, expiryDate, batchNumber || 'default']);
           matched++;
         } else {
           unmatched++;
@@ -188,7 +289,7 @@ router.post('/upload-pricelist', authenticate, requireApproved, authorize('distr
           totalRows: data.length,
           matched,
           unmatched,
-          unmatchedItems: unmatchedItems.slice(0, 20) // Show first 20 unmatched
+          unmatchedItems: unmatchedItems.slice(0, 20)
         }
       });
     } catch (err) {
