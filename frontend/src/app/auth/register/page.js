@@ -5,12 +5,15 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/store/auth';
 import toast from 'react-hot-toast';
+import { Eye, EyeOff } from 'lucide-react';
 
 export default function RegisterPage() {
   const router = useRouter();
   const { register, loading } = useAuthStore();
   const [step, setStep] = useState(1);
   const [role, setRole] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -31,9 +34,14 @@ export default function RegisterPage() {
       return;
     }
     try {
-      await register({ ...formData, role });
-      toast.success('Ro\'yxatdan muvaffaqiyatli o\'tdingiz! Admin tasdiqlashini kuting.');
-      router.push('/auth/login');
+      const result = await register({ ...formData, role });
+      // Save token for waiting page polling
+      if (result.token) {
+        localStorage.setItem('token', result.token);
+        localStorage.setItem('user', JSON.stringify(result.user));
+      }
+      toast.success('Ro\'yxatdan muvaffaqiyatli o\'tdingiz!');
+      router.push('/auth/waiting');
     } catch (err) {
       toast.error(err.response?.data?.error || 'Ro\'yxatdan o\'tish xatosi');
     }
@@ -121,25 +129,43 @@ export default function RegisterPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Parol</label>
-                <input
-                  type="password"
-                  className="input-field"
-                  placeholder="Kamida 6 ta belgi"
-                  value={formData.password}
-                  onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                  required
-                />
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    className="input-field pr-12"
+                    placeholder="Kamida 6 ta belgi"
+                    value={formData.password}
+                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 transition"
+                  >
+                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Parolni tasdiqlang</label>
-                <input
-                  type="password"
-                  className="input-field"
-                  placeholder="Parolni takrorlang"
-                  value={formData.confirmPassword}
-                  onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
-                  required
-                />
+                <div className="relative">
+                  <input
+                    type={showConfirmPassword ? 'text' : 'password'}
+                    className="input-field pr-12"
+                    placeholder="Parolni takrorlang"
+                    value={formData.confirmPassword}
+                    onChange={(e) => setFormData({ ...formData, confirmPassword: e.target.value })}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600 transition"
+                  >
+                    {showConfirmPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">INN</label>
