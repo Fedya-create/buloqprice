@@ -110,7 +110,39 @@ router.get('/inventory', authenticate, requireApproved, authorize('distributor')
   }
 });
 
-// Upload Excel price list
+// Preview Excel file (parse columns and sample rows without saving)
+router.post('/preview-pricelist', authenticate, requireApproved, authorize('distributor'), upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'Fayl yuklanmadi' });
+    }
+
+    const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const data = XLSX.utils.sheet_to_json(sheet);
+
+    if (data.length === 0) {
+      return res.status(400).json({ error: 'Fayl bo\'sh yoki formati noto\'g\'ri' });
+    }
+
+    // Get column names from first row
+    const columns = Object.keys(data[0]);
+    // Sample first 5 rows for preview
+    const sampleRows = data.slice(0, 5);
+
+    res.json({
+      columns,
+      sampleRows,
+      totalRows: data.length
+    });
+  } catch (err) {
+    console.error('Preview pricelist error:', err);
+    res.status(500).json({ error: 'Faylni o\'qishda xatolik' });
+  }
+});
+
+// Upload Excel price list with column mapping
 router.post('/upload-pricelist', authenticate, requireApproved, authorize('distributor'), upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -119,6 +151,14 @@ router.post('/upload-pricelist', authenticate, requireApproved, authorize('distr
 
     const distResult = await pool.query('SELECT id FROM distributors WHERE user_id = $1', [req.user.id]);
     const distributorId = distResult.rows[0].id;
+
+    // Parse mapping from request
+    let mapping = {};
+    try {
+      mapping = JSON.parse(req.body.mapping || '{}');
+    } catch (e) {
+      // Fallback: use default column names
+    }
 
     // Parse Excel file
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
@@ -135,13 +175,14 @@ router.post('/upload-pricelist', authenticate, requireApproved, authorize('distr
       await client.query('BEGIN');
 
       for (const row of data) {
-        const barcode = row['Shtrix-kod'] || row['barcode'] || row['Barcode'];
-        const mxik = row['MXIK'] || row['mxik_code'];
-        const name = row['Nomi'] || row['name'] || row['Name'] || row['Dori nomi'];
-        const price = parseFloat(row['Narx'] || row['price'] || row['Price'] || 0);
-        const quantity = parseInt(row['Soni'] || row['quantity'] || row['Qty'] || row['Qoldiq'] || 0);
-        const expiryDate = row['Yaroqlilik'] || row['expiry'] || row['Expiry'] || null;
-        const batchNumber = row['Partiya'] || row['batch'] || row['Batch'] || null;
+        // Use mapping to get values, fallback to common column names
+        const barcode = mapping.barcode ? row[mapping.barcode] : (row['Shtrix-kod'] || row['barcode'] || row['Barcode']);
+        const mxik = mapping.mxik ? row[mapping.mxik] : (row['MXIK'] || row['mxik_code']);
+        const name = mapping.name ? row[mapping.name] : (row['Nomi'] || row['name'] || row['Name'] || row['Dori nomi']);
+        const price = parseFloat(mapping.price ? row[mapping.price] : (row['Narx'] || row['price'] || row['Price'] || 0));
+        const quantity = parseInt(mapping.quantity ? row[mapping.quantity] : (row['Soni'] || row['quantity'] || row['Qty'] || row['Qoldiq'] || 0)) || 0;
+        const expiryDate = mapping.expiry ? row[mapping.expiry] : (row['Yaroqlilik'] || row['expiry'] || row['Expiry'] || null);
+        const batchNumber = mapping.batch ? row[mapping.batch] : (row['Partiya'] || row['batch'] || row['Batch'] || null);
 
         if (!price || price <= 0) continue;
 
@@ -188,7 +229,7 @@ router.post('/upload-pricelist', authenticate, requireApproved, authorize('distr
           totalRows: data.length,
           matched,
           unmatched,
-          unmatchedItems: unmatchedItems.slice(0, 20) // Show first 20 unmatched
+          unmatchedItems: unmatchedItems.slice(0, 20)
         }
       });
     } catch (err) {
