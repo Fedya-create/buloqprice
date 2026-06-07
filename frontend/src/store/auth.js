@@ -1,11 +1,20 @@
 import { create } from 'zustand';
 import api from '@/lib/api';
 
-export const useAuthStore = create((set) => ({
-  user: typeof window !== 'undefined' ? JSON.parse(localStorage.getItem('user') || 'null') : null,
+export const useAuthStore = create((set, get) => ({
+  user: null,
   profile: null,
-  token: typeof window !== 'undefined' ? localStorage.getItem('token') : null,
+  token: null,
   loading: false,
+  hydrated: false,
+
+  // Call this in useEffect to hydrate from localStorage (avoids SSR mismatch)
+  hydrate: () => {
+    if (typeof window === 'undefined') return;
+    const token = localStorage.getItem('token');
+    const user = JSON.parse(localStorage.getItem('user') || 'null');
+    set({ token, user, hydrated: true });
+  },
 
   login: async (email, password) => {
     set({ loading: true });
